@@ -32,7 +32,15 @@ module Fam
       output_path:,
       person_name:
     )
-      failure
+
+      family_io(input_path: input_path, output_path: output_path) do |fam|
+        fam.add_person(person_name: symbolize(person_name))
+      end
+      success "Added person: #{person_name}"
+    rescue Fam::Family::Errors::DuplicatePerson
+      failure "Person '#{person_name} already in family"
+    rescue Fam::Errors::Any => e
+      failure e.message
     end
 
     # IMPLEMENT ME
@@ -42,7 +50,17 @@ module Fam
       child_name:,
       parent_names:
     )
-      failure
+      family_io(input_path: input_path, output_path: output_path) do |fam|
+        fam.add_parents(child_name: symbolize(child_name),
+                        parent_names: symbolize(parent_names))
+      end
+      success "Added #{stringify(parent_names).join(' & ')} as parents of #{child_name}"
+    rescue Fam::Family::Errors::TooManyParents
+      failure "Child '#{child_name}' can't have more than 2 parents!"
+    rescue Fam::Family::Errors::NoSuchPerson => e
+      failure "No such person '#{e.message}' in family"
+    rescue Fam::Errors::Any => e
+      failure e.message
     end
 
     # IMPLEMENT ME
@@ -50,7 +68,15 @@ module Fam
       input_path:,
       person_name:
     )
-      failure
+
+      family_io(input_path: input_path) do |fam|
+        fam.get_person(person_name: symbolize(person_name))
+      end
+      success stringify(person_name)
+    rescue Fam::Family::Errors::NoSuchPerson => e
+      failure "No such person '#{e.message}' in family"
+    rescue Fam::Errors::Any => e
+      failure e.message
     end
 
     # IMPLEMENT ME
@@ -58,7 +84,16 @@ module Fam
       input_path:,
       child_name:
     )
-      failure
+
+      parents = []
+      family_io(input_path: input_path) do |fam|
+        parents = fam.get_parents(child_name: symbolize(child_name))
+      end
+      success stringify(parents).join("\n")
+    rescue Fam::Family::Errors::NoSuchPerson => e
+      failure "No such person '#{e.message}' in family"
+    rescue Fam::Errors::Any => e
+      failure e.message
     end
 
     # IMPLEMENT ME
@@ -67,7 +102,75 @@ module Fam
       child_name:,
       greatness:
     )
-      failure
+
+      parents = []
+      generations = greatness.to_i + 1
+      family_io(input_path: input_path) do |fam|
+        parents = fam.get_parents(child_name: symbolize(child_name), generations: generations.to_i)
+      end
+      success stringify(parents).join("\n")
+    rescue Fam::Family::Errors::NoSuchPerson => e
+      failure "No such person '#{e.message}' in family"
+    rescue Fam::Errors::Any => e
+      failure e.message
     end
+
+    private
+
+    def family_io(input_path:, output_path: nil)
+      fam = nil
+      begin
+        fam = import_family(read(path: input_path))
+      rescue Fam::File::Reader::Errors::FileMissing
+        raise Fam::Errors::IOError, "No such file #{input_path}"
+      rescue Fam::File::Reader::Errors::ParserError
+        raise Fam::Errors::IOError, "#{input_path} contains invalid JSON"
+      rescue Fam::Family::Errors::Any
+        raise Fam::Errors::FamilyError, "#{input_path} contains invalid Family"
+      end
+
+      yield fam
+
+      begin
+        write(path: output_path, json_hash: fam.to_hash) unless output_path.nil?
+      rescue Fam::Writer::Errors::Any
+        raise Fam::Errors::IOError, "Unable to write to #{output_path}"
+      end
+    end
+
+    def import_family(family_hash)
+      fam = Family.new
+      family_hash.keys.map do |person|
+        fam.add_person(person_name: symbolize(person))
+      end
+      family_hash.keys.map do |person|
+        fam.add_parents(child_name: symbolize(person), parent_names: symbolize(family_hash[person]))
+      end
+      fam
+    end
+
+    def symbolize(arg)
+      transform(arg, &:to_sym)
+    end
+
+    def stringify(arg)
+      transform(arg, &:to_s)
+    end
+
+    def transform(object, &block)
+      if object.is_a?(Enumerable)
+        object.map do |element|
+          transform(element, &block)
+        end
+      else
+        block.call(object)
+      end
+    end
+  end
+
+  module Errors
+    class Any < StandardError; end
+    class IOError < Any; end
+    class FamilyError < Any; end
   end
 end
